@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Calendar, Settings, Moon, Sun, Clock, RefreshCw, AlertCircle, CheckCircle, Plus, Trash2, LogOut, Lock, Download, Upload, Edit2, Save, X, Eye, Users, FileSpreadsheet, Activity, Maximize2, Minimize2, ChevronUp, ChevronDown, RotateCcw } from 'lucide-react';
+import { Calendar, CalendarDays, Settings, Moon, Sun, Clock, RefreshCw, AlertCircle, CheckCircle, Plus, Trash2, LogOut, Lock, Download, Upload, Edit2, Save, X, Eye, Users, FileSpreadsheet, Activity, Maximize2, Minimize2, ChevronUp, ChevronDown, RotateCcw } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { supabase } from './lib/supabase';
 
@@ -240,6 +240,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
   const [staffError, setStaffError] = useState('');
   const [adminAsStaff, setAdminAsStaff] = useState(false);
   const [showDevLogin, setShowDevLogin] = useState(false);
+  const [showMySchedule, setShowMySchedule] = useState(false);
   
   // ローディング状態
   const [isLoading, setIsLoading] = useState(true);
@@ -3372,15 +3373,99 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                 </div>
                 <p className="text-lg font-bold text-emerald-600">{targetYear}年{targetMonth + 1}月の休み希望入力</p>
               </div>
-              <button
-                onClick={handleStaffLogout}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl flex items-center gap-2 transition-colors self-start"
-              >
-                <LogOut size={18} />
-                {adminAsStaff ? 'ダッシュボードに戻る' : '終了'}
-              </button>
+              <div className="flex gap-2 self-start">
+                <button
+                  onClick={() => setShowMySchedule(true)}
+                  className="px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-xl flex items-center gap-2 transition-colors"
+                >
+                  <CalendarDays size={18} />
+                  勤務表確認
+                </button>
+                <button
+                  onClick={handleStaffLogout}
+                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl flex items-center gap-2 transition-colors"
+                >
+                  <LogOut size={18} />
+                  {adminAsStaff ? 'ダッシュボードに戻る' : '終了'}
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* 勤務表閲覧モーダル */}
+          {showMySchedule && (() => {
+            const myShifts = (schedule && schedule.month === `${targetYear}-${targetMonth}`)
+              ? (schedule.data[staffNurseId] || []).map((s: any) => sanitizeShift(s))
+              : [];
+            const hasData = myShifts.length > 0 && myShifts.some((s: any) => s !== null);
+            const holidays = getJapaneseHolidays(targetYear, targetMonth);
+            const firstDayOfWeek = new Date(targetYear, targetMonth, 1).getDay();
+            const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
+
+            // 集計
+            const dayShiftCount = myShifts.filter((s: any) => s === '日' || s === '午前半' || s === '午後半').length;
+            const nightCount = myShifts.filter((s: any) => s === '夜' || s === '管夜').length;
+            const restCount = myShifts.filter((s: any) => s === '休' || s === '有').length
+              + myShifts.filter((s: any) => s === '午前半' || s === '午後半').length * 0.5;
+
+            return (
+              <div className="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+                <div className="max-w-lg mx-auto my-4 p-5 bg-white rounded-2xl">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-bold">📅 {targetYear}年{targetMonth + 1}月 勤務表</h3>
+                    <button onClick={() => setShowMySchedule(false)} className="p-2 hover:bg-gray-100 rounded-full">
+                      <X size={20} />
+                    </button>
+                  </div>
+
+                  {!hasData ? (
+                    <div className="text-center py-12 text-gray-500">
+                      <CalendarDays size={48} className="mx-auto mb-3 opacity-30" />
+                      <p>勤務表はまだ作成されていません</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-7 gap-px bg-gray-200 rounded-lg overflow-hidden mb-4">
+                        {dayNames.map((d, i) => (
+                          <div key={d} className={`text-center text-xs font-bold py-1.5 bg-gray-50 ${i === 0 ? 'text-red-500' : i === 6 ? 'text-blue-500' : 'text-gray-600'}`}>{d}</div>
+                        ))}
+                        {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+                          <div key={`empty-${i}`} className="bg-white p-1" />
+                        ))}
+                        {myShifts.map((shift: any, idx: number) => {
+                          const day = idx + 1;
+                          const dow = new Date(targetYear, targetMonth, day).getDay();
+                          const isHoliday = holidays.includes(day);
+                          const shiftColor = shift ? ((SHIFT_TYPES as any)[shift]?.color || 'bg-gray-50') : 'bg-white';
+                          return (
+                            <div key={day} className={`${shiftColor} p-1.5 min-h-[3rem] flex flex-col items-center`}>
+                              <span className={`text-xs font-medium ${isHoliday || dow === 0 ? 'text-red-500' : dow === 6 ? 'text-blue-500' : 'text-gray-500'}`}>{day}</span>
+                              {shift && <span className="text-xs font-bold mt-0.5">{shift}</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-blue-50 rounded-lg p-3 text-center">
+                          <p className="text-xs text-blue-600">出勤日数</p>
+                          <p className="text-xl font-bold text-blue-700">{dayShiftCount + nightCount}</p>
+                        </div>
+                        <div className="bg-purple-50 rounded-lg p-3 text-center">
+                          <p className="text-xs text-purple-600">夜勤回数</p>
+                          <p className="text-xl font-bold text-purple-700">{nightCount}</p>
+                        </div>
+                        <div className="bg-emerald-50 rounded-lg p-3 text-center">
+                          <p className="text-xs text-emerald-600">休日数</p>
+                          <p className="text-xl font-bold text-emerald-700">{restCount}</p>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* DB接続状態 */}
           {dbStatus === 'error' && (
