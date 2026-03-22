@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Calendar, CalendarDays, Settings, Moon, Sun, Clock, RefreshCw, AlertCircle, CheckCircle, Plus, Trash2, LogOut, Lock, Download, Upload, Edit2, Save, X, Eye, Users, FileSpreadsheet, Activity, Maximize2, Minimize2, ChevronUp, ChevronDown, RotateCcw, History, BarChart3 } from 'lucide-react';
+import { Calendar, CalendarDays, Settings, Moon, Sun, Clock, RefreshCw, AlertCircle, CheckCircle, Plus, Trash2, LogOut, Lock, Download, Upload, Edit2, Save, X, Eye, Users, FileSpreadsheet, Activity, Maximize2, Minimize2, ChevronUp, ChevronDown, RotateCcw, History, BarChart3, UserX } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { supabase } from './lib/supabase';
 
@@ -333,7 +333,11 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
   // 職員別シフト設定: { nurseId: { maxNightShifts: number, noNightShift: boolean, noDayShift: boolean } }
   const [nurseShiftPrefs, setNurseShiftPrefs] = useState<Record<number, { maxNightShifts: number; noNightShift: boolean; noDayShift: boolean; excludeFromMaxDaysOff: boolean; maxRequests: number; excludeFromGeneration: boolean }>>({});
   const [showNurseShiftPrefs, setShowNurseShiftPrefs] = useState(false);
-  
+
+  // 夜勤NG組み合わせ
+  const [nightNgPairs, setNightNgPairs] = useState<[number, number][]>([]);
+  const [showNightNgPairs, setShowNightNgPairs] = useState(false);
+
   // 前月データ関連（プレビュー用）
   const [showPrevMonthImport, setShowPrevMonthImport] = useState(false);
   const [showPrevMonthReview, setShowPrevMonthReview] = useState(false);
@@ -440,6 +444,14 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           try {
             setNurseShiftPrefs(JSON.parse(savedPrefs));
           } catch(e) { console.error('職員設定解析エラー:', e); }
+        }
+
+        // 夜勤NG組み合わせの読み込み
+        const savedNgPairs = await fetchSettingFromDB('nightNgPairs');
+        if (savedNgPairs) {
+          try {
+            setNightNgPairs(JSON.parse(savedNgPairs));
+          } catch(e) { console.error('夜勤NGペア解析エラー:', e); }
         }
 
         // 管理者パスワードの読み込み
@@ -1229,6 +1241,17 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       return true;
     };
 
+    // 夜勤NGペアチェック
+    const hasNightNgConflict = (schedule: any, nurseId: number, day: number) => {
+      const pairs = nightNgPairs.filter(([a, b]) => a === nurseId || b === nurseId);
+      if (pairs.length === 0) return false;
+      for (const [a, b] of pairs) {
+        const partnerId = a === nurseId ? b : a;
+        if (isNightShift(schedule[partnerId]?.[day])) return true;
+      }
+      return false;
+    };
+
     // 連続勤務ヘルパー
     const consecBefore = (sc: any, nid: number, day: number) => {
       let c = 0; for (let d = day - 1; d >= 0; d--) { if (isWorkShift(sc[nid][d])) c++; else break; } return c;
@@ -1365,6 +1388,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           if (day > 0 && isNightShift(sc[n.id][day - 1])) return false;
           if (wouldBeTripleNight(sc, n.id, day)) return false;
           if (consecBefore(sc, n.id, day) >= cfg.maxConsec) return false;
+          if (hasNightNgConflict(sc, n.id, day)) return false;
           return true;
         }).sort((a, b) => {
           const d = st[a.id].nightCount - st[b.id].nightCount;
@@ -1674,6 +1698,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           const mx = pr?.maxNightShifts ?? cfg.maxNightShifts;
           if (adj[n.id].filter((s: any) => isCountableNight(s)).length >= mx) return false;
           if (wouldBeTripleNight(adj, n.id, day)) return false;
+          if (hasNightNgConflict(adj, n.id, day)) return false;
           return true;
         }).sort((a, b) => adj[a.id].filter((s: any) => isCountableNight(s)).length - adj[b.id].filter((s: any) => isCountableNight(s)).length);
         if (cands.length === 0) break;
@@ -1746,7 +1771,8 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       while (nc < nReq) {
         const c = generationNurses.filter(n => !isNightShift(adj[n.id][day]) && !isAkeShift(adj[n.id][day]) && !isLocked(n.id, day) && !(day > 0 && isNightShift(adj[n.id][day-1])) && !(day+1 < daysInMonth && isNightShift(adj[n.id][day+1])) && !nurseShiftPrefs[n.id]?.noNightShift && adj[n.id].filter((s: any) => isCountableNight(s)).length < (nurseShiftPrefs[n.id]?.maxNightShifts ?? cfg.maxNightShifts)
           && !(day + 1 < daysInMonth && isLocked(n.id, day + 1) && exReqs[n.id]?.[day + 1] && exReqs[n.id][day + 1] !== '明')
-          && !wouldBeTripleNight(adj, n.id, day))
+          && !wouldBeTripleNight(adj, n.id, day)
+          && !hasNightNgConflict(adj, n.id, day))
           .sort((a, b) => adj[a.id].filter((s: any) => isCountableNight(s)).length - adj[b.id].filter((s: any) => isCountableNight(s)).length);
         if (c.length === 0) break;
         adj[c[0].id][day] = '夜';
@@ -1820,6 +1846,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           const mx = pr?.maxNightShifts ?? cfg.maxNightShifts;
           if (adj[n.id].filter((s: any) => isCountableNight(s)).length >= mx) return false;
           if (wouldBeTripleNight(adj, n.id, day)) return false;
+          if (hasNightNgConflict(adj, n.id, day)) return false;
           return true;
         }).sort((a, b) => adj[a.id].filter((s: any) => isCountableNight(s)).length - adj[b.id].filter((s: any) => isCountableNight(s)).length);
 
@@ -2014,6 +2041,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           const mx = pr?.maxNightShifts ?? cfg.maxNightShifts;
           if (adj[n.id].filter((s: any) => isCountableNight(s)).length >= mx) return false;
           if (wouldBeTripleNight(adj, n.id, day)) return false;
+          if (hasNightNgConflict(adj, n.id, day)) return false;
           return true;
         }).sort((a, b) => adj[a.id].filter((s: any) => isCountableNight(s)).length - adj[b.id].filter((s: any) => isCountableNight(s)).length);
 
@@ -2030,6 +2058,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
             const mx = (pr?.maxNightShifts ?? cfg.maxNightShifts) + 1;
             if (adj[n.id].filter((s: any) => isCountableNight(s)).length >= mx) return false;
             if (wouldBeTripleNight(adj, n.id, day)) return false;
+            if (hasNightNgConflict(adj, n.id, day)) return false;
             return true;
           }).sort((a, b) => adj[a.id].filter((s: any) => isCountableNight(s)).length - adj[b.id].filter((s: any) => isCountableNight(s)).length);
         }
@@ -2170,6 +2199,20 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       report.push('✅ データ保護: 希望データ・前月データ保持OK');
       console.log('✅ データ保護検証: 希望データ・前月データは変更なし');
     }
+
+    // 夜勤NGペア違反検証
+    let ngPairOk = true;
+    for (let d = 0; d < daysInMonth; d++) {
+      for (const [a, b] of nightNgPairs) {
+        if (isNightShift(final[a]?.[d]) && isNightShift(final[b]?.[d])) {
+          const nameA = generationNurses.find(n => n.id === a)?.name || activeNurses.find(n => n.id === a)?.name || String(a);
+          const nameB = generationNurses.find(n => n.id === b)?.name || activeNurses.find(n => n.id === b)?.name || String(b);
+          ngPairOk = false; hasViolation = true;
+          report.push(`⚠️ NGペア違反: ${nameA}と${nameB}が${d + 1}日に同時夜勤`);
+        }
+      }
+    }
+    if (ngPairOk && nightNgPairs.length > 0) report.push('✅ 夜勤NGペア: 違反なし');
 
     // 希望反映検証
     let reqOk = true;
@@ -2829,6 +2872,9 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
               <div className="flex flex-wrap gap-2">
                 <button onClick={() => setShowDevLogin(true)} className="px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg text-sm flex items-center gap-1">
                   <Eye size={16} /> 職員画面確認
+                </button>
+                <button onClick={() => setShowNightNgPairs(true)} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-sm flex items-center gap-1">
+                  <UserX size={16} /> 夜勤NG組
                 </button>
                 <button onClick={() => setShowSettings(!showSettings)} className={`px-3 py-2 rounded-lg text-sm flex items-center gap-1 ${showSettings ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 hover:bg-gray-200'}`}>
                   <Settings size={16} /> 職員管理
@@ -5553,6 +5599,101 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                   >
                     閉じる
                   </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 夜勤NG組み合わせモーダル */}
+        {showNightNgPairs && (
+          <div className="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+            <div className="min-h-full flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl p-6 w-full max-w-lg my-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xl font-bold">🚫 夜勤NG組み合わせ</h3>
+                  <button onClick={() => setShowNightNgPairs(false)} className="p-2 hover:bg-gray-100 rounded-full">
+                    <X size={24} />
+                  </button>
+                </div>
+
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
+                  <p className="text-sm text-red-800">
+                    <strong>💡 説明：</strong>登録したペアは自動生成時に同じ日の夜勤に配置されません。
+                  </p>
+                </div>
+
+                {/* 登録済みペア一覧 */}
+                <div className="mb-4">
+                  <h4 className="text-sm font-bold text-gray-700 mb-2">登録済みペア（{nightNgPairs.length}組）</h4>
+                  {nightNgPairs.length === 0 ? (
+                    <p className="text-sm text-gray-400 py-2">まだ登録されていません</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {nightNgPairs.map(([a, b], idx) => {
+                        const nameA = activeNurses.find(n => n.id === a)?.name || `ID:${a}`;
+                        const nameB = activeNurses.find(n => n.id === b)?.name || `ID:${b}`;
+                        return (
+                          <div key={idx} className="flex items-center justify-between bg-gray-50 rounded-lg p-2">
+                            <span className="text-sm font-medium">{nameA} × {nameB}</span>
+                            <button
+                              onClick={() => {
+                                const updated = nightNgPairs.filter((_, i) => i !== idx);
+                                setNightNgPairs(updated);
+                                saveWithStatus(async () => {
+                                  await saveSettingToDB('nightNgPairs', JSON.stringify(updated));
+                                });
+                              }}
+                              className="p-1 text-red-500 hover:bg-red-100 rounded"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* 新規追加 */}
+                <div className="border-t pt-4">
+                  <h4 className="text-sm font-bold text-gray-700 mb-2">新規追加</h4>
+                  <div className="flex gap-2 items-end">
+                    <select id="ngPairA" className="flex-1 px-3 py-2 border-2 rounded-lg text-sm">
+                      <option value="">選択...</option>
+                      {activeNurses.map(n => (
+                        <option key={n.id} value={n.id}>{n.name}</option>
+                      ))}
+                    </select>
+                    <span className="text-gray-400 text-sm pb-2">×</span>
+                    <select id="ngPairB" className="flex-1 px-3 py-2 border-2 rounded-lg text-sm">
+                      <option value="">選択...</option>
+                      {activeNurses.map(n => (
+                        <option key={n.id} value={n.id}>{n.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => {
+                        const selA = document.getElementById('ngPairA') as HTMLSelectElement;
+                        const selB = document.getElementById('ngPairB') as HTMLSelectElement;
+                        const a = parseInt(selA.value);
+                        const b = parseInt(selB.value);
+                        if (!a || !b || a === b) { alert('異なる2名を選択してください'); return; }
+                        const exists = nightNgPairs.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+                        if (exists) { alert('このペアは既に登録されています'); return; }
+                        const updated: [number, number][] = [...nightNgPairs, [a, b]];
+                        setNightNgPairs(updated);
+                        saveWithStatus(async () => {
+                          await saveSettingToDB('nightNgPairs', JSON.stringify(updated));
+                        });
+                        selA.value = '';
+                        selB.value = '';
+                      }}
+                      className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm whitespace-nowrap"
+                    >
+                      追加
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
